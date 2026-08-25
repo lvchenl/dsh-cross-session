@@ -1,0 +1,17 @@
+# dsh-cross-session bundle patch: mounts the cross-session plugin into the host
+# composition of a dsh profile. The plugin registers its `cross_session_*`
+# tools into the shared `tools` registry, so every session of the profile can
+# spawn durable top-level sessions, send tasks to them, and receive their
+# replies over the same channel.
+#
+# Install: `dsh plugin --profile <name> add <this package>` (npm or a local
+# path). The `dsh plugin` command pnpm-installs the package into the profile
+# and reconciles it into the profile's `dsh.profile.bundles` layer list.
+- insert:
+    - id: cross-session
+      # Node-resolvable package name — must stay in sync with package.json
+      # `name`. Quoted because `@` is a reserved indicator in YAML.
+      name: 'dsh-cross-session'
+      config:
+        # Cross-session registry lives under `<session workspace>/<stateDir>/`.
+        stateDir: .cross-session
