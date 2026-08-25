@@ -34,13 +34,20 @@ pnpm --dir "$HOME/.dsh/profiles/web" link dsh-cross-session
 | 工具 | 作用 |
 |---|---|
 | `cross_session_spawn` | 创建全新顶层会话并投递任务，立即返回（不等待执行）；`reply_to` 可指定结果回给第三方会话；`model` / `reasoning_effort` 可指定新会话的模型与推理程度（默认继承调用者） |
-| `cross_session_send` | 给任意会话发消息（`wake: false` 则仅排队）；未打开的会话自动从磁盘叫醒后投递；`reply_to` 可指定本次任务结果回给谁 |
-| `cross_session_reply` | 任务会话专用：把结果回复给指定会话并唤醒它；目标未打开时自动从磁盘叫醒 |
+| `cross_session_send` | 给任意会话发消息（默认**插队**：忙碌时也在当前步骤结束后立即注入；`interrupt: false` 则排队等整轮结束；`wake: false` 则仅投递不唤醒）；未打开的会话自动从磁盘叫醒后投递；`reply_to` 可指定本次任务结果回给谁 |
+| `cross_session_reply` | 任务会话专用：把结果回复给指定会话（默认**插队**投递并唤醒它）；目标未打开时自动从磁盘叫醒 |
 | `cross_session_status` | 查看登记的任务会话：运行状态、回复次数、最近回复摘要 |
 | `cross_session_read` | 读取某个会话最近的工作过程/结果（用户消息 + 助手回复）；未打开的从磁盘直接读取 |
 | `cross_session_list` | 快速列出所有顶层会话（名称 + 会话 id + 模型名称 + 推理程度），可选含已归档 |
 | `cross_session_rename` | 修改任意会话的名称：活跃会话走官方 rename，未打开的会话直接落盘事件（钉住标题） |
-| `cross_session_broadcast` | 一次给多个会话发不同消息（各自独立任务），逐个投递并报告结果；每个目标可带 `reply_to` 指定回信对象 |
+| `cross_session_broadcast` | 一次给多个会话发不同消息（各自独立任务），逐个投递并报告结果；每个目标可带 `reply_to` 指定回信对象、`interrupt` 控制是否插队 |
+
+## 投递语义（插队）
+
+所有跨会话投递默认**插队（next-step）**：目标会话忙碌时，消息在当前步骤结束后立即
+注入（空闲时同样立刻开新轮）——消息越早到位，越能省时间与 token。`interrupt: false`
+改为排队（next-turn，等目标当前整轮结束）。底层使用 DSH 原生 `steer`/`followup`/
+`inject` 语义（对不支持 `steer` 的宿主自动降级为 followup，不丢消息）。
 | `cross_session_archive` | 归档任意会话（与 GUI 右键归档同一条官方通道，持久化、幂等、可恢复） |
 
 ## 协议
@@ -92,6 +99,7 @@ cross_session_archive { session_id: "session-a" }
 
 | 版本 | 内容 |
 |---|---|
+| 0.3.2 | 投递语义升级：全部默认**插队**（DSH 原生 `steer`/next-step）；`send`/`broadcast` 新增 `interrupt` 参数；修复 `wake: false` 原先未真正生效的问题 |
 | 0.3.1 | P2-6：移除 `inject: ['tools','agents']`（不再阻塞 profile 启动），改为 apply() 显式 `ctx.get` 解析 tools/agents 并清晰报错 |
 | 0.3.0 | 兼容性加固（审计修复）：启动守卫、登记表原子写 + 写失败降级、list cwd 规范化、engines 声明、README 兼容性章节 |
 | 0.2.9 | `cross_session_status` 显示回信对象（leadSessionId）与模型/推理程度；CI 发布流水线（Trusted Publishing / OIDC） |
