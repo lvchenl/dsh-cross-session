@@ -1,0 +1,25 @@
+name: Publish to npm
+
+# Release via GitHub Actions keyless OpenID Connect (Trusted Publishing).
+# Trigger: push a semver tag (vX.Y.Z) or run manually from the Actions tab.
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - name: Publish package
+        run: npm publish --provenance --access public
