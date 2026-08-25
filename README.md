@@ -92,6 +92,7 @@ cross_session_archive { session_id: "session-a" }
 
 | 版本 | 内容 |
 |---|---|
+| 0.3.0 | 兼容性加固（审计修复）：启动守卫、登记表原子写 + 写失败降级、list cwd 规范化、engines 声明、README 兼容性章节 |
 | 0.2.9 | `cross_session_status` 显示回信对象（leadSessionId）与模型/推理程度；CI 发布流水线（Trusted Publishing / OIDC） |
 | 0.2.8 | `spawn` 支持 `model` / `reasoning_effort` 指定（默认继承调用者） |
 | 0.2.7 | `cross_session_archive` 归档工具（官方 workspaceRegistry 通道） |
@@ -109,6 +110,20 @@ cross_session_archive { session_id: "session-a" }
 - 没有 Web UI 面板；状态通过 `cross_session_status` 工具查询。
 - 模型/推理程度的合法取值由 LLM 适配器定义（本项目用 `off/low/medium/high/max`），
   不合法值会在会话发起请求时报错。
+
+## 兼容性与排障
+
+- **宿主版本**：兼容 dsh **0.1.x**（`@deepseek-ai/dsh-*` 0.1.1-rc.2 系）。宿主升级后若
+  出现跨会话能力异常，插件启动时会打印 `[dsh-cross-session]` 前缀的告警；如有告警请
+  升级本插件到最新版（跟随 dsh 发布节奏）。
+- **Node**：需要 **≥ 18**（`engines` 声明）；CI 使用 Node 24。
+- **profile 要求**：需要 `dsh-base` 提供的 `tools` / `agents` 服务（web/tui/headless
+  三个标准 profile 均满足）。`agentPresets` 与 `workspaceRegistry` 仅在 web-app 类
+  profile 中存在——非 web profile 下 `archive` 与工作区依附会降级/报清晰错误，其余工具可用。
+- **安装前置**：`dsh plugin add` 底层是 profile 目录内的 pnpm，本机 PATH 需有
+  `pnpm`；安装后**重启宿主**（或刷新页面）生效。
+- **登记表**：写入 `<工作区>/.cross-session/registry.json`（`stateDir` 可配置）；
+  写失败不阻塞业务操作，仅打 `[dsh-cross-session]` 告警。
 
 ## 许可证
 
