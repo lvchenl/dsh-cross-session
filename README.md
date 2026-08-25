@@ -92,6 +92,7 @@ cross_session_archive { session_id: "session-a" }
 
 | 版本 | 内容 |
 |---|---|
+| 0.2.9 | `cross_session_status` 显示回信对象（leadSessionId）与模型/推理程度；CI 发布流水线（Trusted Publishing / OIDC） |
 | 0.2.8 | `spawn` 支持 `model` / `reasoning_effort` 指定（默认继承调用者） |
 | 0.2.7 | `cross_session_archive` 归档工具（官方 workspaceRegistry 通道） |
 | 0.2.6 | `cross_session_read` 未打开的会话改为从磁盘直接读取 |
