@@ -1,6 +1,6 @@
 {
   "name": "dsh-cross-session",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Cross-session messaging for DeepSeek Harness: spawn durable top-level sessions, send tasks to them over the same channel they reply on, without blocking the caller.",
   "engines": {
     "node": ">=18"

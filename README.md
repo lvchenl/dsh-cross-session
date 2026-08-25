@@ -92,6 +92,7 @@ cross_session_archive { session_id: "session-a" }
 
 | 版本 | 内容 |
 |---|---|
+| 0.3.1 | P2-6：移除 `inject: ['tools','agents']`（不再阻塞 profile 启动），改为 apply() 显式 `ctx.get` 解析 tools/agents 并清晰报错 |
 | 0.3.0 | 兼容性加固（审计修复）：启动守卫、登记表原子写 + 写失败降级、list cwd 规范化、engines 声明、README 兼容性章节 |
 | 0.2.9 | `cross_session_status` 显示回信对象（leadSessionId）与模型/推理程度；CI 发布流水线（Trusted Publishing / OIDC） |
 | 0.2.8 | `spawn` 支持 `model` / `reasoning_effort` 指定（默认继承调用者） |
