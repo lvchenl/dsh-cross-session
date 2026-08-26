@@ -1,112 +1,215 @@
-# dsh-cross-session · 跨会话通信
+# dsh-cross-session（跨会话通信）
 
-[DeepSeek Harness](https://www.deepseek.com/) 的跨会话消息插件（B 形态：**顶层持久会话**）。
+DeepSeek Harness 的跨会话消息插件。**功能复刻自 Codex（ChatGPT Work）的跨线程任务调度**
+（`codex_app__create_thread` / `send_message_to_thread` / `read_thread` / `wait_threads`），
+用 DSH 的会话机制实现：**一个会话派任务 = 创建一个全新的顶层会话，任务完成后它自己把结果送回来。**
 
-一个会话可以**创建全新的顶层会话**（与侧边栏会话同等级、持久、可复用），把任务作为消息投递过去并**立即唤醒它执行**，自己**不等待**、可以继续做其他工作；任务会话完成后，通过**同一条通道**把结果回复回来。发送与回复走完全对称的原语（`agent.followup` 一条 user 消息），因此"消息怎么发过去，就怎么回过来"。
+一句话原理：发送与回复完全对称——投递就是给目标会话追加一条用户可见消息
+（`agent.followup` / `steer`），所以**消息发过去，成果就回来**。
 
-## 特性
+> English version: [README.en.md](README.en.md)
 
-- **创建持久会话**（`spawn`）：新会话与侧边栏会话同等级，未结束前一直在；可指定 **model / reasoning_effort**（默认继承调用者），可指定 **reply_to** 把结果回给第三方会话
-- **任意会话可达**：`send` / `reply` / `read` / `rename` / `archive` 对**未打开的会话同样有效**（自动从磁盘叫醒，或直接读取磁盘日志，无需先打开）
-- **一对多广播**（`broadcast`）：一次给多个会话发**不同**任务，逐个投递并报告结果
-- **状态登记**：任务会话、回信对象（leadSessionId）、回复记录持久化在 `<工作区>/.cross-session/registry.json`
-- **与 GUI 同源**：`rename` 走官方 SessionTitleService，`archive` 走官方 workspaceRegistry.archiveSession（持久化、幂等、可恢复）
+## 为什么做这个
+
+### 痛点
+
+| 没有它 | 有了它 |
+|---|---|
+| 一个会话里任务越堆越多：调研、写代码、审查混在一起，上下文互相污染 | 每个任务一个独立会话，上下文干净 |
+| 想并行干活只能开好几个窗口，手动复制粘贴任务和结果 | 一条工具调用派活，spawn 立即返回，不占你的轮 |
+| 派出去的活是黑盒：不知道在不在跑、结果在哪 | 登记表 + `status`：运行状态、回信、模型、推理程度一目了然 |
+| 任务间没有"回信"通道，结果要你主动去翻 | 任务完成自动回信（送达 + 叫醒创建者），你直接看到 |
+
+### 好处，具体说
+
+- **超线程**：`spawn` 即返回，你继续干别的；多个助手并行跑，谁先完谁先回。
+- **不丢消息**：会话是顶层、持久的（落盘），关闭了也能从磁盘叫醒；消息先排队后送达。
+- **插队语义**：目标会话忙碌时，消息在当前步骤结束后**立即注入**（不是等它整轮跑完）——agent 之间的信息越早到位，越省时间和 token。
+- **可回信**：任务书里协议已内置——工作完成必须 `cross_session_reply` 把结果回给你（或回给第三方 `reply_to`）。
+- **可指定模型**：每个任务会话可指定模型/推理程度，默认继承调用者。
+- **能管理**：`list` / `rename` / `archive` 与 GUI 同通道，会话不失控。
 
 ## 安装
 
-### 方式一：npm（发布后）
-
 ```sh
+# 方式一：普通用户
 dsh plugin --profile web add dsh-cross-session
 # 重启 dsh web 宿主（或刷新页面）后生效
-```
 
-### 方式二：本地开发（链接）
-
-```sh
-# 在 profile 的 node_modules 里指向插件目录（Windows junction / Linux symlink）
+# 方式二：本地开发（链接）
 pnpm --dir "$HOME/.dsh/profiles/web" link dsh-cross-session
 # 或直接把插件目录链接到 $HOME/.dsh/profiles/web/node_modules/dsh-cross-session
 ```
 
-## 工具
+前置：本机 PATH 有 `pnpm`（`dsh plugin add` 底层是 profile 目录内的 pnpm）。
+
+## 快速上手
+
+```sh
+# 1. 派活（立即返回，session_id 是 spawn 返回的）
+cross_session_spawn {
+  name: "调研助手",
+  task: "调研 DeepSeek Harness 的插件机制，输出总结。完成后调用 cross_session_reply 回复。"
+}
+
+# 2. 不用等——完成后它会自动回信，你在对话里看到：
+#   [cross-session] 来自会话 session-xxx 的回复：……
+
+# 3. 任何时候查总览
+cross_session_status
+```
+
+## 场景示例
+
+### 场景 A：开发项目——三路并行（推荐用法）
+
+你在 DeepSeekHarness 项目里，一口气派三个助手，各自独立、互不干扰：
+
+```sh
+cross_session_spawn {
+  name: "兼容性调研",
+  task: "用 npm view 逐一确认依赖版本可解析性，输出结论与证据。完成后 cross_session_reply 回复。"
+}
+
+cross_session_spawn {
+  name: "代码审查",
+  task: "审查 lib/index.js 的可移植性：硬编码路径、平台特化、服务缺失降级。逐条列出问题与严重级别。完成后 cross_session_reply 回复。"
+}
+
+cross_session_spawn {
+  name: "发布演练",
+  task: "在 dev/ 目录演练发布流程：校验 → 打包 → 列出发布物与版本号。完成后 cross_session_reply 回复。"
+}
+```
+
+你继续做自己的事。三个助手完成后会各自回信；中途要看进度或汇总：
+
+```sh
+cross_session_status                    # 全部任务会话：运行状态 + 最近回复
+cross_session_read { session_id: "session-xxx" }   # 读某个助手的工作过程
+```
+
+中途追加任务（不用新开会话，且默认插队——正忙的助手也会在下一步收到）：
+
+```sh
+cross_session_send {
+  session_id: "session-xxx",
+  message: "再补一项：确认 engines 字段已随包发布。完成后回复我。"
+}
+```
+
+让结果**回给另一个会话**（三方路由，例如让子任务汇报给"主 agent"）：
+
+```sh
+cross_session_spawn {
+  name: "子任务",
+  task: "……",
+  reply_to: "session-主agent"
+}
+```
+
+### 场景 B：文档工作（非开发）
+
+写一份调研报告，全程不碰代码，同一个套路：
+
+```sh
+# ① 资料员：收集素材并回信（session_id 用 spawn 返回的 id）
+cross_session_spawn {
+  name: "资料员",
+  task: "根据以下链接收集素材，按主题整理成要点列表。完成后 cross_session_reply 回复。"
+}
+
+# ② 拿到素材后，让它继续扩写成报告
+cross_session_send {
+  session_id: "session-资料员",
+  message: "请把素材扩展成 3000 字报告，分三节，完成后回复我。"
+}
+
+# ③ 校对员：查错别字、结构、一致性，回信
+cross_session_spawn {
+  name: "校对员",
+  task: "检查报告的结构与错别字，给出修改建议清单。完成后 cross_session_reply 回复。"
+}
+```
+
+派活、接力、校对——**与写代码完全相同的三个动作：spawn / send / 收回信**。
+
+### 场景 C：不想被唤醒时
+
+```sh
+# 只排队不唤醒（目标当前工作结束后再处理，或等下次有人叫它）
+cross_session_send { session_id: "session-xxx", message: "不急，回头做", wake: false }
+
+# 不插队：等目标整轮跑完再处理
+cross_session_send { session_id: "session-xxx", message: "稍后任务", interrupt: false }
+```
+
+### 场景 D：管理清理
+
+```sh
+cross_session_list { limit: 50, include_archived: true }   # 所有顶层会话
+cross_session_rename { session_id: "session-xxx", name: "新名字" }
+cross_session_archive { session_id: "session-xxx" }        # 归档（与 GUI 右键同通道，可恢复）
+```
+
+## 工具一览
 
 | 工具 | 作用 |
 |---|---|
-| `cross_session_spawn` | 创建全新顶层会话并投递任务，立即返回（不等待执行）；`reply_to` 可指定结果回给第三方会话；`model` / `reasoning_effort` 可指定新会话的模型与推理程度（默认继承调用者） |
-| `cross_session_send` | 给任意会话发消息（默认**插队**：忙碌时也在当前步骤结束后立即注入；`interrupt: false` 则排队等整轮结束；`wake: false` 则仅投递不唤醒）；未打开的会话自动从磁盘叫醒后投递；`reply_to` 可指定本次任务结果回给谁 |
-| `cross_session_reply` | 任务会话专用：把结果回复给指定会话（默认**插队**投递并唤醒它）；目标未打开时自动从磁盘叫醒 |
-| `cross_session_status` | 查看登记的任务会话：运行状态、回复次数、最近回复摘要 |
-| `cross_session_read` | 读取某个会话最近的工作过程/结果（用户消息 + 助手回复）；未打开的从磁盘直接读取 |
-| `cross_session_list` | 快速列出所有顶层会话（名称 + 会话 id + 模型名称 + 推理程度），可选含已归档 |
-| `cross_session_rename` | 修改任意会话的名称：活跃会话走官方 rename，未打开的会话直接落盘事件（钉住标题） |
-| `cross_session_broadcast` | 一次给多个会话发不同消息（各自独立任务），逐个投递并报告结果；每个目标可带 `reply_to` 指定回信对象、`interrupt` 控制是否插队 |
+| `cross_session_spawn` | 创建全新顶层会话并投递任务，立即返回；`reply_to` 指定结果回给谁；`model` / `reasoning_effort` 指定模型与推理程度（默认继承调用者） |
+| `cross_session_send` | 给任意会话发消息（默认**插队**；`interrupt: false` 排队等整轮；`wake: false` 只投递不唤醒）；未打开会话自动从磁盘叫醒 |
+| `cross_session_reply` | 任务会话专用：把结果回复给指定会话（默认**插队**投递并叫醒） |
+| `cross_session_status` | 登记总览：运行状态、回复次数、最近回复、回信对象、模型/推理程度 |
+| `cross_session_read` | 读取某会话最近工作过程（用户消息 + 助手回复）；未打开的从磁盘直读 |
+| `cross_session_list` | 列出所有顶层会话（名称/会话 id/模型/推理程度），可选含已归档 |
+| `cross_session_rename` | 修改任意会话名称（未打开的写事件钉住标题） |
+| `cross_session_broadcast` | 一次给多个会话发不同消息（各自独立任务），逐个报告结果 |
+| `cross_session_archive` | 归档任意会话（官方通道，持久化、幂等、可恢复） |
 
 ## 投递语义（插队）
 
-所有跨会话投递默认**插队（next-step）**：目标会话忙碌时，消息在当前步骤结束后立即
-注入（空闲时同样立刻开新轮）——消息越早到位，越能省时间与 token。`interrupt: false`
-改为排队（next-turn，等目标当前整轮结束）。底层使用 DSH 原生 `steer`/`followup`/
-`inject` 语义（对不支持 `steer` 的宿主自动降级为 followup，不丢消息）。
-| `cross_session_archive` | 归档任意会话（与 GUI 右键归档同一条官方通道，持久化、幂等、可恢复） |
+所有投递**默认插队（next-step）**：目标忙碌时，消息在当前步骤结束后立即注入（空闲时同样立刻开新轮）。
+`interrupt: false` 改为排队（next-turn，等当前整轮结束）。底层用 DSH 原生 `steer` / `followup` / `inject`；
+不支持 `steer` 的宿主自动降级为 `followup`，不丢消息。
 
 ## 协议
 
 `spawn` 时注入的任务消息会指示新会话：**工作完成后调用 `cross_session_reply`
-（`captain_session_id` = 创建者会话 id，或 `reply_to` 指定的会话）回复结果**；
-目标会话被唤醒后，在其对话中会看到 `[cross-session] 来自会话 <id> 的回复：…`。
+（`captain_session_id` = 创建者会话，或 `reply_to` 指定的会话）回复结果**；
+目标会话在自己的对话里会看到 `[cross-session] 来自会话 <id> 的回复：…`。
 
 状态登记在 `<工作区>/.cross-session/registry.json`（`stateDir` 可配置）。
 
-## 示例
-
-```sh
-# 列出一个 "调研助手"，让它完成后回信给我
-cross_session_spawn {
-  name: "调研助手",
-  task: "调研 DeepSeek Harness 的插件机制，输出总结",
-  reasoning_effort: "high"        # 可选：新会话的推理程度
-}
-
-# 列出所有顶层会话（名称 / 会话 id / 模型 / 推理程度）
-cross_session_list { "limit": 50, "include_archived": true }
-
-# 给多个会话派不同任务
-cross_session_broadcast {
-  targets: [
-    { session_id: "session-a", message: "任务A" },
-    { session_id: "session-b", message: "任务B", reply_to: "session-a" }
-  ]
-}
-
-# 修改任意会话名称
-cross_session_rename { session_id: "session-a", name: "新名字" }
-
-# 归档测试会话
-cross_session_archive { session_id: "session-a" }
-```
-
 ## 配置
 
-```yaml
-- id: cross-session
-  name: 'dsh-cross-session'
-  config:
-    stateDir: .cross-session
-```
+| 项 | 默认 | 说明 |
+|---|---|---|
+| `stateDir` | `.cross-session` | 登记表所在目录（相对工作区根） |
+
+## 兼容性与排障
+
+- **宿主版本**：兼容 dsh **0.1.x**（`@deepseek-ai/dsh-*` 0.1.1-rc.2 系）。宿主升级后若跨会话能力异常，
+  插件启动时会打印 `[dsh-cross-session]` 前缀告警；如有告警请升级本插件到最新版。
+- **Node**：需要 **≥ 18**（`engines` 声明）；CI 使用 Node 24。
+- **profile 要求**：需要 `dsh-base` 提供的 `tools` / `agents` 服务（web/tui/headless 标准 profile 均满足）。
+  `agentPresets` 与 `workspaceRegistry` 仅 web-app 类 profile 存在——非 web profile 下 `archive`
+  与工作区依附会降级/报清晰错误，其余工具可用。
+- **安装前置**：PATH 有 `pnpm`；安装后**重启宿主**（或刷新页面）生效。
+- **登记表**：写入失败不阻塞业务操作，仅打 `[dsh-cross-session]` 告警。
 
 ## 版本历史
 
 | 版本 | 内容 |
 |---|---|
-| 0.3.2 | 投递语义升级：全部默认**插队**（DSH 原生 `steer`/next-step）；`send`/`broadcast` 新增 `interrupt` 参数；修复 `wake: false` 原先未真正生效的问题 |
-| 0.3.1 | P2-6：移除 `inject: ['tools','agents']`（不再阻塞 profile 启动），改为 apply() 显式 `ctx.get` 解析 tools/agents 并清晰报错 |
-| 0.3.0 | 兼容性加固（审计修复）：启动守卫、登记表原子写 + 写失败降级、list cwd 规范化、engines 声明、README 兼容性章节 |
-| 0.2.9 | `cross_session_status` 显示回信对象（leadSessionId）与模型/推理程度；CI 发布流水线（Trusted Publishing / OIDC） |
-| 0.2.8 | `spawn` 支持 `model` / `reasoning_effort` 指定（默认继承调用者） |
-| 0.2.7 | `cross_session_archive` 归档工具（官方 workspaceRegistry 通道） |
-| 0.2.6 | `cross_session_read` 未打开的会话改为从磁盘直接读取 |
-| 0.2.5 | `reply_to` 三方路由覆盖 spawn / send / broadcast；reply 自动叫醒（修复） |
+| 0.3.3 | README 重写：中文主版 + 英文版；明确复刻自 Codex 跨线程任务调度 |
+| 0.3.2 | 投递语义升级：全部默认**插队**（`steer`/next-step）；`send`/`broadcast` 新增 `interrupt`；修复 `wake: false` 未生效问题 |
+| 0.3.1 | P2-6：移除 `inject` 阻塞，改为 apply() 显式 `ctx.get` 校验并清晰报错 |
+| 0.3.0 | 兼容性加固（审计修复）：启动守卫、登记表原子写 + 写失败降级、list cwd 规范化、engines 声明 |
+| 0.2.9 | `status` 显示回信对象与模型/推理程度；CI 发布流水线（Trusted Publishing / OIDC） |
+| 0.2.8 | `spawn` 支持 `model` / `reasoning_effort`（默认继承调用者） |
+| 0.2.7 | `cross_session_archive` 归档工具 |
+| 0.2.6 | `cross_session_read` 未打开会话改为磁盘直读 |
+| 0.2.5 | `reply_to` 三方路由覆盖 spawn/send/broadcast；reply 自动叫醒 |
 | 0.2.4 | `cross_session_reply` 目标未打开时自动从磁盘叫醒 |
 | 0.2.3 | `cross_session_broadcast` 一对多广播 |
 | 0.2.2 | `cross_session_rename` 任意会话改名 |
@@ -119,20 +222,6 @@ cross_session_archive { session_id: "session-a" }
 - 没有 Web UI 面板；状态通过 `cross_session_status` 工具查询。
 - 模型/推理程度的合法取值由 LLM 适配器定义（本项目用 `off/low/medium/high/max`），
   不合法值会在会话发起请求时报错。
-
-## 兼容性与排障
-
-- **宿主版本**：兼容 dsh **0.1.x**（`@deepseek-ai/dsh-*` 0.1.1-rc.2 系）。宿主升级后若
-  出现跨会话能力异常，插件启动时会打印 `[dsh-cross-session]` 前缀的告警；如有告警请
-  升级本插件到最新版（跟随 dsh 发布节奏）。
-- **Node**：需要 **≥ 18**（`engines` 声明）；CI 使用 Node 24。
-- **profile 要求**：需要 `dsh-base` 提供的 `tools` / `agents` 服务（web/tui/headless
-  三个标准 profile 均满足）。`agentPresets` 与 `workspaceRegistry` 仅在 web-app 类
-  profile 中存在——非 web profile 下 `archive` 与工作区依附会降级/报清晰错误，其余工具可用。
-- **安装前置**：`dsh plugin add` 底层是 profile 目录内的 pnpm，本机 PATH 需有
-  `pnpm`；安装后**重启宿主**（或刷新页面）生效。
-- **登记表**：写入 `<工作区>/.cross-session/registry.json`（`stateDir` 可配置）；
-  写失败不阻塞业务操作，仅打 `[dsh-cross-session]` 告警。
 
 ## 许可证
 
